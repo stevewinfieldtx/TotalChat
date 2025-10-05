@@ -1,0 +1,15 @@
+{
+  "character_type": "historical_person",
+  "basic_info": {
+    "id": "jesus_christ",
+    "name": "Jesus Christ (Yeshua)",
+    "title": "Central Figure of Christianity, Teacher and Healer",
+    "era": "circa 4 BCE - 30/33 CE",
+    "occupation": "Rabbi, Teacher, Spiritual Leader"
+  },
+  "literary_work_info": {
+    "note": "Historical/religious figure (known through Gospel accounts)",
+    "work_title": null,
+    ...
+  }
+}

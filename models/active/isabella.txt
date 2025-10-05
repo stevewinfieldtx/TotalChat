@@ -1,0 +1,6 @@
+# isabella.txt
+# Placeholder file for AI Influencer Platform
+# Implementation to be added
+
+This is a placeholder file for: isabella.txt
+Location: models/active

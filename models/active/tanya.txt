@@ -1,0 +1,6 @@
+# tanya.txt
+# Placeholder file for AI Influencer Platform
+# Implementation to be added
+
+This is a placeholder file for: tanya.txt
+Location: models/active

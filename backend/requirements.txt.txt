@@ -1,0 +1,7 @@
+# requirements.txt.txt
+# Placeholder file for AI Influencer Platform
+# This file will contain the actual implementation
+
+File: requirements.txt.txt
+Location: backend
+Status: Placeholder - implementation needed

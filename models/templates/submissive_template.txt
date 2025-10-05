@@ -1,0 +1,6 @@
+# submissive_template.txt
+# Placeholder file for AI Influencer Platform
+# Implementation to be added
+
+This is a placeholder file for: submissive_template.txt
+Location: models/templates

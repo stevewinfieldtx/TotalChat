@@ -2,24 +2,40 @@
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import List, Dict
-import asyncio
 from pydantic import BaseModel, Field, ValidationError
-from typing import Dict, List
+from typing import List, Dict, Any
 import json
 from datetime import datetime
+from pathlib import Path
+import os
+from dotenv import load_dotenv
+import logging
 
 from models.character import Character
-from services.openrouter_service import OpenRouterService
-from services.runware_service import RunwareService
-from services.elevenlabs_service import ElevenLabsService
+from .services.openrouter_service import OpenRouterService
+from .services.runware_service import RunwareService
+from .services.elevenlabs_service import ElevenLabsService
+
+# Ensure we load env vars from the backend directory specifically
+_BACKEND_ENV = Path(__file__).resolve().parent / ".env"
+load_dotenv(_BACKEND_ENV, override=False)
 
 app = FastAPI()
 
+# Route our OpenRouter logs through Uvicorn's logger so they show up
+_uvicorn_logger = logging.getLogger("uvicorn.error")
+_openrouter_logger = logging.getLogger("openrouter")
+_openrouter_logger.setLevel(logging.INFO)
+if _uvicorn_logger.handlers:
+    _openrouter_logger.handlers = _uvicorn_logger.handlers
+    _openrouter_logger.propagate = False
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=[
+        os.getenv("CORS_ORIGIN", "http://localhost:3000"),
+        "http://localhost:5173",
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -30,7 +46,6 @@ class ChatRequest(BaseModel):
 
     message: str
     characters: List[Dict]
-    conversation_history: List[Dict]
     conversation_history: List[Dict] = Field(default_factory=list)
 
 class ConnectionManager:
@@ -58,9 +73,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
     try:
         while True:
             data = await websocket.receive_text()
-            request = json.loads(data)
-            
-
             try:
                 if hasattr(ChatRequest, "model_validate_json"):
                     request = ChatRequest.model_validate_json(data)  # Pydantic v2
@@ -82,12 +94,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 continue
 
             # Process message for each character
-            for character_data in request["characters"]:
-                character = Character(**character_data)
-                
             for character_data in request.characters:
                 try:
-                    character = Character(**character_data)
+                    character = _build_character_from_payload(character_data)
                 except (TypeError, ValueError) as exc:
                     await websocket.send_json(
                         {
@@ -102,9 +111,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
 
                 # Generate response using OpenRouter
                 response = await generate_character_response(
-                    character, 
-                    request["message"], 
-                    request["conversation_history"]
                     character,
                     request.message,
                     request.conversation_history,
@@ -128,7 +134,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         "audioData": voice_data
                     })
                 
-
                 avatar_prompt = await generate_avatar_prompt(character)
                 await websocket.send_json(
                     {
@@ -143,8 +148,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         manager.disconnect(websocket)
 
 async def generate_character_response(character: Character, message: str, history: List[Dict]) -> str:
-    openrouter = OpenRouterService()
-    
+    _uvicorn_logger.info("generate_character_response: model=%s name=%s", character.model, character.name)
     prompt = f"""You are {character.name}, {character.description}.
     
     Personality: {character.personality}
@@ -157,15 +161,197 @@ async def generate_character_response(character: Character, message: str, histor
     
     Respond as {character.name} would, staying in character and maintaining historical accuracy."""
     
-    return await openrouter.generate_response(prompt, character.model)
-    return await openrouter_service.generate_response(prompt, character.model)
+    # Prefer a direct OpenRouter call; fall back to local generator on error
+    resolved_model = character.model or "openai/gpt-5-mini"
+    try:
+        content = await openrouter_service._call_openrouter(prompt, resolved_model)  # type: ignore[attr-defined]
+        if content and isinstance(content, str) and content.strip():
+            _uvicorn_logger.info("generate_character_response: openrouter ok (%d chars)", len(content))
+            return content.strip()
+    except Exception as exc:
+        _uvicorn_logger.exception("generate_character_response: openrouter error -> falling back: %s", exc)
+
+    # Fallback path via service wrapper (deterministic local generator)
+    response = await openrouter_service.generate_response(prompt, resolved_model)
+    _uvicorn_logger.info("generate_character_response: fallback response (%d chars)", len(response or ""))
+    return response
 
 async def generate_voice(character: Character, text: str) -> str:
     return await elevenlabs_service.generate_speech(text, character.voice_id)
-
-
-async def generate_voice(character: Character, text: str) -> bytes:
-    elevenlabs = ElevenLabsService()
-    return await elevenlabs.generate_speech(text, character.voice_id)
 async def generate_avatar_prompt(character: Character) -> Dict[str, str]:
     return await runware_service.build_avatar_prompt(character)
+
+
+def _build_character_from_payload(data: Dict) -> Character:
+    """Create a Character from a potentially partial client payload.
+
+    Frontend may only send a subset of fields (id, name, title, images).
+    This helper fills sensible defaults for the rest so the backend remains
+    robust while the UI evolves.
+    """
+
+    # Attempt to hydrate from local JSON if category/id provided
+    category = data.get("category")
+    char_id = data.get("id")
+    if category and char_id:
+        json_path = _characters_root() / category / f"{char_id}.json"
+        if json_path.exists():
+            try:
+                raw = json.loads(json_path.read_text(encoding="utf-8"))
+                name = (
+                    raw.get("name")
+                    or (raw.get("core_identity") or {}).get("name")
+                    or data.get("name")
+                    or "Character"
+                )
+                description = (
+                    raw.get("description")
+                    or (raw.get("core_identity") or {}).get("profession")
+                    or data.get("title")
+                    or "A conversational persona."
+                )
+                dominant = (raw.get("psychological_profile") or {}).get("dominant_traits") or []
+                personality = ", ".join(dominant) if isinstance(dominant, list) and dominant else data.get("personality") or "Helpful, friendly, and curious."
+                speaking_style = (
+                    (raw.get("communication_style") or {}).get("tone_and_cadence")
+                    or (raw.get("voice_profile") or {}).get("tone")
+                    or data.get("speaking_style")
+                    or "Clear, concise, and engaging."
+                )
+                context = (
+                    (raw.get("backstory_and_life_experiences") or {}).get("education_and_training")
+                    or (raw.get("interaction_guidelines") or {}).get("chat_behavior")
+                    or data.get("context")
+                    or ""
+                )
+                voice_enabled = bool(data.get("voice_enabled", False))
+                voice_id = data.get("voice_id") if voice_enabled else None
+                return Character(
+                    id=str(char_id),
+                    name=str(name),
+                    description=str(description),
+                    personality=str(personality),
+                    speaking_style=str(speaking_style),
+                    context=str(context),
+                    model=data.get("model", "openrouter/auto"),
+                    voice_enabled=voice_enabled,
+                    voice_id=voice_id,
+                    metadata=data.get("metadata", {}),
+                )
+            except Exception:
+                pass
+
+    name = data.get("name") or data.get("character_name") or "Character"
+    description = (
+        data.get("description")
+        or data.get("title")
+        or "A conversational persona."
+    )
+    voice_enabled = bool(data.get("voice_enabled", False))
+    voice_id = data.get("voice_id") if voice_enabled else None
+
+    return Character(
+        id=str(data.get("id") or name.lower().replace(" ", "_")),
+        name=name,
+        description=description,
+        personality=data.get("personality", "Helpful, friendly, and curious."),
+        speaking_style=data.get("speaking_style", "Clear, concise, and engaging."),
+        context=data.get("context", ""),
+        model=data.get("model", "openrouter/auto"),
+        voice_enabled=voice_enabled,
+        voice_id=voice_id,
+        metadata=data.get("metadata", {}),
+    )
+
+
+# -------- Development helpers: list and fetch local characters -------- #
+
+def _characters_root() -> Path:
+    # project root is one level above backend/ directory
+    return Path(__file__).resolve().parents[1] / "public" / "characters"
+
+
+@app.get("/api/characters/categories")
+async def list_categories() -> Dict[str, List[str]]:
+    root = _characters_root()
+    categories = [p.name for p in root.iterdir() if p.is_dir()]
+    return {"categories": sorted(categories)}
+
+
+@app.get("/api/characters/{category}")
+async def list_characters(category: str) -> Dict[str, List[Dict[str, Any]]]:
+    root = _characters_root() / category
+    if not root.exists() or not root.is_dir():
+        return {"characters": []}
+
+    results: List[Dict[str, Any]] = []
+    for file in sorted(root.glob("*.json")):
+        try:
+            data = json.loads(file.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        name = (
+            data.get("name")
+            or (data.get("core_identity") or {}).get("name")
+            or (data.get("metadata") or {}).get("character_name")
+            or file.stem
+        )
+        title = (
+            data.get("title")
+            or (data.get("core_identity") or {}).get("profession")
+            or (data.get("metadata") or {}).get("model_id")
+            or "Character"
+        )
+        char_id = file.stem
+        images = [
+            f"https://api.dicebear.com/7.x/avataaars/svg?seed={char_id}",
+            f"https://api.dicebear.com/7.x/avataaars/svg?seed={char_id}2",
+            f"https://api.dicebear.com/7.x/avataaars/svg?seed={char_id}3",
+        ]
+        results.append({
+            "id": char_id,
+            "name": name,
+            "title": title,
+            "images": images,
+            "category": category,
+        })
+    return {"characters": results}
+
+
+@app.get("/api/characters/{category}/{char_id}")
+async def fetch_character(category: str, char_id: str) -> Dict[str, Any]:
+    path = _characters_root() / category / f"{char_id}.json"
+    if not path.exists():
+        return {"error": "not_found"}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        return {"error": str(exc)}
+
+
+@app.get("/debug/openrouter")
+async def debug_openrouter() -> Dict[str, Any]:
+    """Quick check that env is loaded and OpenRouter is configured."""
+    return {
+        "has_api_key": bool(os.getenv("OPENROUTER_API_KEY")),
+        "api_url": os.getenv(
+            "OPENROUTER_API_URL", "https://openrouter.ai/api/v1/chat/completions"
+        ),
+        "http_referer": os.getenv("OPENROUTER_HTTP_REFERER"),
+        "app_title": os.getenv("OPENROUTER_APP_TITLE"),
+        "cors_origin": os.getenv("CORS_ORIGIN"),
+    }
+
+
+@app.get("/debug/openrouter/ping")
+async def debug_openrouter_ping() -> Dict[str, Any]:
+    """Attempt a minimal OpenRouter call to verify connectivity."""
+    svc = openrouter_service
+    if not os.getenv("OPENROUTER_API_KEY"):
+        return {"ok": False, "reason": "no_api_key"}
+    try:
+        # Call the API directly; if it fails we'll return the error
+        content = await svc._call_openrouter("Reply with the single word: pong", "openrouter/auto")  # type: ignore[attr-defined]
+        return {"ok": True, "content": content}
+    except Exception as exc:
+        return {"ok": False, "reason": "api_error", "detail": str(exc)}

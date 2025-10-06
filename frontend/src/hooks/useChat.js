@@ -1,98 +1,136 @@
-import { useState, useCallback, useRef } from 'react';
-import api from '../services/api';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-export const useChat = (characterId) => {
+// WebSocket chat hook that talks to the FastAPI backend
+export const useChat = (characters = []) => {
   const [messages, setMessages] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const abortControllerRef = useRef(null);
+  const [isTyping, setIsTyping] = useState({});
+  const [connected, setConnected] = useState(false);
+  const wsRef = useRef(null);
+  const clientIdRef = useRef(`${Date.now()}_${Math.floor(Math.random() * 1e6)}`);
+  const queueRef = useRef([]); // messages waiting for WS OPEN
 
-  const sendMessage = useCallback(async (content, options = {}) => {
-    if (!content?.trim()) return;
+  const backendHttp = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/?$/, '');
+  const wsBase = backendHttp.startsWith('https')
+    ? backendHttp.replace('https', 'wss')
+    : backendHttp.replace('http', 'ws');
+
+  // Derive current speaking character (last assistant)
+  const currentSpeaker = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+      const msg = messages[i];
+      if (msg.role !== 'user' && msg.characterId) {
+        return characters.find(c => c.id === msg.characterId) || null;
+      }
+    }
+    return characters[0] || null;
+  }, [messages, characters]);
+
+  // Open WebSocket when characters are available
+  useEffect(() => {
+    if (!characters || characters.length === 0) return;
+
+    const url = `${wsBase}/ws/${clientIdRef.current}`;
+    const ws = new WebSocket(url);
+    wsRef.current = ws;
+
+    ws.onopen = () => {
+      setConnected(true);
+      // flush any queued messages
+      try {
+        const q = queueRef.current;
+        while (q.length) {
+          const payload = q.shift();
+          ws.send(JSON.stringify(payload));
+        }
+      } catch {}
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'character_response') {
+          const assistantMessage = {
+            id: Date.now(),
+            role: 'assistant',
+            characterId: data.characterId,
+            content: data.content,
+            timestamp: data.timestamp || new Date().toISOString(),
+          };
+          setMessages(prev => [...prev, assistantMessage]);
+          setIsTyping(prev => ({ ...prev, [data.characterId]: false }));
+        }
+        // Other message types: voice_data, avatar_prompt, error
+      } catch (e) {
+        // ignore malformed frames
+      }
+    };
+
+    ws.onerror = () => {
+      setConnected(false);
+    };
+
+    ws.onclose = () => {
+      setConnected(false);
+    };
+
+    return () => {
+      try { ws.close(); } catch {}
+      wsRef.current = null;
+    };
+  }, [wsBase, characters]);
+
+  const sendMessage = useCallback((content) => {
+    const text = (content || '').trim();
+    if (!text) return;
 
     const userMessage = {
       id: Date.now(),
       role: 'user',
-      content: content.trim(),
-      timestamp: new Date().toISOString()
+      content: text,
+      timestamp: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, userMessage]);
+
+    // optimistic typing indicators
+    const typingState = {};
+    characters.forEach(c => { typingState[c.id] = true; });
+    setIsTyping(typingState);
+
+    const ws = wsRef.current;
+    const payload = {
+      message: text,
+      characters: characters.map(c => ({
+        id: c.id,
+        name: c.name,
+        title: c.title,
+        images: c.images,
+        category: c.category,
+        model: c.model,
+      })),
+      conversation_history: messages.map(m => ({
+        role: m.role,
+        characterId: m.characterId,
+        content: m.content,
+        timestamp: m.timestamp,
+      })),
     };
 
-    setMessages(prev => [...prev, userMessage]);
-    setIsLoading(true);
-    setError(null);
-
-    // Cancel any ongoing request
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      // Queue and let onopen flush
+      queueRef.current.push(payload);
+      // Stop typing indicator after short delay if connection still not open
+      setTimeout(() => setIsTyping({}), 600);
+      return;
     }
-    abortControllerRef.current = new AbortController();
 
     try {
-      const response = await api.sendMessage({
-        characterId,
-        message: content.trim(),
-        history: messages,
-        ...options
-      }, abortControllerRef.current.signal);
-
-      const assistantMessage = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: response.message,
-        emotion: response.emotion,
-        imageUrl: response.imageUrl,
-        audioUrl: response.audioUrl,
-        timestamp: new Date().toISOString()
-      };
-
-      setMessages(prev => [...prev, assistantMessage]);
-      return assistantMessage;
-
-    } catch (err) {
-      if (err.name === 'AbortError') {
-        console.log('Request cancelled');
-        return;
-      }
-      
-      const errorMessage = err.message || 'Failed to send message';
-      setError(errorMessage);
-      
-      // Add error message to chat
-      const errorMsg = {
-        id: Date.now() + 1,
-        role: 'assistant',
-        content: `Sorry, I encountered an error: ${errorMessage}`,
-        isError: true,
-        timestamp: new Date().toISOString()
-      };
-      setMessages(prev => [...prev, errorMsg]);
-      
-      throw err;
-    } finally {
-      setIsLoading(false);
-      abortControllerRef.current = null;
+      ws.send(JSON.stringify(payload));
+    } catch (e) {
+      setTimeout(() => setIsTyping({}), 300);
     }
-  }, [characterId, messages]);
+  }, [characters, messages]);
 
-  const clearMessages = useCallback(() => {
-    setMessages([]);
-    setError(null);
-  }, []);
-
-  const cancelRequest = useCallback(() => {
-    if (abortControllerRef.current) {
-      abortControllerRef.current.abort();
-    }
-  }, []);
-
-  return {
-    messages,
-    isLoading,
-    error,
-    sendMessage,
-    clearMessages,
-    cancelRequest
-  };
+  return { messages, sendMessage, isTyping, currentSpeaker, connected };
 };
 
 export default useChat;

@@ -1,12 +1,8 @@
-"""FastAPI websocket server for relaying character conversations."""
-
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Dict
 import asyncio
-from pydantic import BaseModel, Field, ValidationError
-from typing import Dict, List
 import json
 from datetime import datetime
 
@@ -26,12 +22,9 @@ app.add_middleware(
 )
 
 class ChatRequest(BaseModel):
-    """Schema describing incoming websocket messages from the UI."""
-
     message: str
     characters: List[Dict]
     conversation_history: List[Dict]
-    conversation_history: List[Dict] = Field(default_factory=list)
 
 class ConnectionManager:
     def __init__(self):
@@ -48,9 +41,6 @@ class ConnectionManager:
         await websocket.send_text(message)
 
 manager = ConnectionManager()
-openrouter_service = OpenRouterService()
-elevenlabs_service = ElevenLabsService()
-runware_service = RunwareService()
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
@@ -60,57 +50,17 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             data = await websocket.receive_text()
             request = json.loads(data)
             
-
-            try:
-                if hasattr(ChatRequest, "model_validate_json"):
-                    request = ChatRequest.model_validate_json(data)  # Pydantic v2
-                else:
-                    request = ChatRequest.parse_raw(data)  # type: ignore[attr-defined]
-            except (ValidationError, ValueError) as exc:
-                if isinstance(exc, ValidationError):
-                    details = json.loads(exc.json())
-                else:
-                    details = str(exc)
-                await websocket.send_json(
-                    {
-                        "type": "error",
-                        "error": "invalid_payload",
-                        "details": details,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
-                continue
-
             # Process message for each character
             for character_data in request["characters"]:
                 character = Character(**character_data)
                 
-            for character_data in request.characters:
-                try:
-                    character = Character(**character_data)
-                except (TypeError, ValueError) as exc:
-                    await websocket.send_json(
-                        {
-                            "type": "error",
-                            "error": "invalid_character",
-                            "details": str(exc),
-                            "characterId": character_data.get("id"),
-                            "timestamp": datetime.now().isoformat(),
-                        }
-                    )
-                    continue
-
                 # Generate response using OpenRouter
                 response = await generate_character_response(
                     character, 
                     request["message"], 
                     request["conversation_history"]
-                    character,
-                    request.message,
-                    request.conversation_history,
                 )
                 
-
                 # Send character response
                 await websocket.send_json({
                     "type": "character_response",
@@ -128,17 +78,6 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         "audioData": voice_data
                     })
                 
-
-                avatar_prompt = await generate_avatar_prompt(character)
-                await websocket.send_json(
-                    {
-                        "type": "avatar_prompt",
-                        "characterId": character.id,
-                        "prompt": avatar_prompt,
-                        "timestamp": datetime.now().isoformat(),
-                    }
-                )
-
     except WebSocketDisconnect:
         manager.disconnect(websocket)
 
@@ -158,14 +97,7 @@ async def generate_character_response(character: Character, message: str, histor
     Respond as {character.name} would, staying in character and maintaining historical accuracy."""
     
     return await openrouter.generate_response(prompt, character.model)
-    return await openrouter_service.generate_response(prompt, character.model)
-
-async def generate_voice(character: Character, text: str) -> str:
-    return await elevenlabs_service.generate_speech(text, character.voice_id)
-
 
 async def generate_voice(character: Character, text: str) -> bytes:
     elevenlabs = ElevenLabsService()
     return await elevenlabs.generate_speech(text, character.voice_id)
-async def generate_avatar_prompt(character: Character) -> Dict[str, str]:
-    return await runware_service.build_avatar_prompt(character)

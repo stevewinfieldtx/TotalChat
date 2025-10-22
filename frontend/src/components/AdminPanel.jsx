@@ -1,6 +1,16 @@
 import React, { useEffect, useState } from 'react';
 
-const backend = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/?$/, '');
+// Use VITE_BACKEND_URL if set, otherwise use same origin (for Railway) or localhost for dev
+const getBackendUrl = () => {
+  const envUrl = import.meta.env.VITE_BACKEND_URL;
+  if (envUrl) return envUrl.replace(/\/?$/, '');
+  // In production (Railway), backend serves on same origin
+  if (import.meta.env.PROD) return window.location.origin;
+  // In development, use localhost
+  return 'http://localhost:8000';
+};
+
+const backend = getBackendUrl();
 
 const AdminPanel = ({ onUseSelection }) => {
   const [categories, setCategories] = useState([]);

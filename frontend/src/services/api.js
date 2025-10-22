@@ -1,5 +1,13 @@
 // frontend/src/services/api.js
-const API_BASE_URL = import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000';
+// Get backend URL - same origin in prod (Railway), localhost in dev
+const getBackendUrl = () => {
+  const envUrl = import.meta.env.VITE_BACKEND_URL;
+  if (envUrl) return envUrl.replace(/\/?$/, '');
+  if (import.meta.env.PROD) return window.location.origin;
+  return 'http://localhost:8000';
+};
+
+const API_BASE_URL = getBackendUrl();
 
 // ============================================
 // CHAT API

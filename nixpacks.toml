@@ -4,11 +4,14 @@ nixPkgs = ["python310", "nodejs-18_x"]
 [phases.install]
 cmds = [
     "pip install -r backend/requirements.txt",
-    "cd frontend && npm install"
+    "cd frontend && npm ci"
 ]
 
 [phases.build]
-cmds = ["cd frontend && npm run build"]
+cmds = [
+    "cd frontend && npm run build",
+    "echo 'Frontend built successfully'"
+]
 
 [start]
 cmd = "uvicorn backend.server:app --host 0.0.0.0 --port $PORT"

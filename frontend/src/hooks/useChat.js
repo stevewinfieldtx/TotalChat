@@ -1,5 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
+// Get backend URL - same origin in prod (Railway), localhost in dev
+const getBackendUrl = () => {
+  const envUrl = import.meta.env.VITE_BACKEND_URL;
+  if (envUrl) return envUrl.replace(/\/?$/, '');
+  if (import.meta.env.PROD) return window.location.origin;
+  return 'http://localhost:8000';
+};
+
 // WebSocket chat hook that talks to the FastAPI backend
 export const useChat = (characters = []) => {
   const [messages, setMessages] = useState([]);
@@ -9,7 +17,7 @@ export const useChat = (characters = []) => {
   const clientIdRef = useRef(`${Date.now()}_${Math.floor(Math.random() * 1e6)}`);
   const queueRef = useRef([]); // messages waiting for WS OPEN
 
-  const backendHttp = (import.meta.env.VITE_BACKEND_URL || 'http://localhost:8000').replace(/\/?$/, '');
+  const backendHttp = getBackendUrl();
   const wsBase = backendHttp.startsWith('https')
     ? backendHttp.replace('https', 'wss')
     : backendHttp.replace('http', 'ws');

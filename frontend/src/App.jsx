@@ -12,8 +12,8 @@ function App() {
   return (
     <div className="app">
       <div className="app-header">
-        <h1>📚 Literary Character Chat</h1>
-        <p>Converse with up to 3 characters from history & literature</p>
+        <h1>💬 TotalChat</h1>
+        <p>Chat with AI characters powered by advanced language models</p>
       </div>
       
       {!isChatActive ? (

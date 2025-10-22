@@ -1,4 +1,5 @@
 {
+  "llm": "anthropic/claude-3.5-sonnet",
   "metadata": {
     "model_id": "71",
     "character_name": "Aurora Bellamy (Skye Olsen)",

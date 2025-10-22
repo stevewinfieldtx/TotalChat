@@ -162,7 +162,7 @@ async def generate_character_response(character: Character, message: str, histor
     Respond as {character.name} would, staying in character and maintaining historical accuracy."""
     
     # Prefer a direct OpenRouter call; fall back to local generator on error
-    resolved_model = character.model or "openai/gpt-5-mini"
+    resolved_model = character.model or "x-ai/grok-4-fast"
     try:
         content = await openrouter_service._call_openrouter(prompt, resolved_model)  # type: ignore[attr-defined]
         if content and isinstance(content, str) and content.strip():
@@ -224,6 +224,15 @@ def _build_character_from_payload(data: Dict) -> Character:
                     or data.get("context")
                     or ""
                 )
+                # Extract LLM model from various possible locations, default to x-ai/grok-4-fast
+                llm_model = (
+                    raw.get("llm")
+                    or raw.get("model")
+                    or (raw.get("metadata") or {}).get("llm")
+                    or (raw.get("metadata") or {}).get("model")
+                    or data.get("model")
+                    or "x-ai/grok-4-fast"
+                )
                 voice_enabled = bool(data.get("voice_enabled", False))
                 voice_id = data.get("voice_id") if voice_enabled else None
                 return Character(
@@ -233,7 +242,7 @@ def _build_character_from_payload(data: Dict) -> Character:
                     personality=str(personality),
                     speaking_style=str(speaking_style),
                     context=str(context),
-                    model=data.get("model", "openrouter/auto"),
+                    model=str(llm_model),
                     voice_enabled=voice_enabled,
                     voice_id=voice_id,
                     metadata=data.get("metadata", {}),
@@ -257,7 +266,7 @@ def _build_character_from_payload(data: Dict) -> Character:
         personality=data.get("personality", "Helpful, friendly, and curious."),
         speaking_style=data.get("speaking_style", "Clear, concise, and engaging."),
         context=data.get("context", ""),
-        model=data.get("model", "openrouter/auto"),
+        model=data.get("model", "x-ai/grok-4-fast"),
         voice_enabled=voice_enabled,
         voice_id=voice_id,
         metadata=data.get("metadata", {}),

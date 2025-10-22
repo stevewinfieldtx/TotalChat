@@ -2,6 +2,8 @@
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, ValidationError
 from typing import List, Dict, Any
 import json
@@ -21,6 +23,11 @@ _BACKEND_ENV = Path(__file__).resolve().parent / ".env"
 load_dotenv(_BACKEND_ENV, override=False)
 
 app = FastAPI()
+
+# Serve frontend static files (for production deployment)
+_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+if _FRONTEND_DIST.exists():
+    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
 
 # Route our OpenRouter logs through Uvicorn's logger so they show up
 _uvicorn_logger = logging.getLogger("uvicorn.error")
@@ -364,3 +371,16 @@ async def debug_openrouter_ping() -> Dict[str, Any]:
         return {"ok": True, "content": content}
     except Exception as exc:
         return {"ok": False, "reason": "api_error", "detail": str(exc)}
+
+
+# Serve frontend index.html for all other routes (SPA support)
+@app.get("/{full_path:path}")
+async def serve_frontend(full_path: str):
+    """Serve the frontend React app for all non-API routes."""
+    # If the frontend dist exists, serve index.html
+    if _FRONTEND_DIST.exists():
+        index_file = _FRONTEND_DIST / "index.html"
+        if index_file.exists():
+            return FileResponse(str(index_file))
+    # Fallback for development or if frontend not built
+    return {"message": "Frontend not built. Run 'cd frontend && npm run build'"}

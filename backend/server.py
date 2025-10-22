@@ -24,11 +24,6 @@ load_dotenv(_BACKEND_ENV, override=False)
 
 app = FastAPI()
 
-# Serve frontend static files (for production deployment)
-_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
-if _FRONTEND_DIST.exists():
-    app.mount("/assets", StaticFiles(directory=str(_FRONTEND_DIST / "assets")), name="assets")
-
 # Route our OpenRouter logs through Uvicorn's logger so they show up
 _uvicorn_logger = logging.getLogger("uvicorn.error")
 _openrouter_logger = logging.getLogger("openrouter")
@@ -36,6 +31,21 @@ _openrouter_logger.setLevel(logging.INFO)
 if _uvicorn_logger.handlers:
     _openrouter_logger.handlers = _uvicorn_logger.handlers
     _openrouter_logger.propagate = False
+
+# Serve frontend static files (for production deployment)
+_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+print(f"[STARTUP] Looking for frontend at: {_FRONTEND_DIST}")
+print(f"[STARTUP] Frontend dist exists: {_FRONTEND_DIST.exists()}")
+if _FRONTEND_DIST.exists():
+    index_file = _FRONTEND_DIST / "index.html"
+    assets_dir = _FRONTEND_DIST / "assets"
+    print(f"[STARTUP] Index file exists: {index_file.exists()}")
+    print(f"[STARTUP] Assets dir exists: {assets_dir.exists()}")
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
+        print(f"[STARTUP] ✓ Mounted /assets from {assets_dir}")
+else:
+    print(f"[STARTUP] ✗ Frontend dist not found! Path: {_FRONTEND_DIST}")
 
 app.add_middleware(
     CORSMiddleware,
@@ -373,14 +383,36 @@ async def debug_openrouter_ping() -> Dict[str, Any]:
         return {"ok": False, "reason": "api_error", "detail": str(exc)}
 
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint to verify deployment status."""
+    return {
+        "status": "ok",
+        "frontend_dist_exists": _FRONTEND_DIST.exists(),
+        "frontend_dist_path": str(_FRONTEND_DIST),
+        "index_exists": (_FRONTEND_DIST / "index.html").exists() if _FRONTEND_DIST.exists() else False,
+        "assets_exists": (_FRONTEND_DIST / "assets").exists() if _FRONTEND_DIST.exists() else False,
+    }
+
+
 # Serve frontend index.html for all other routes (SPA support)
 @app.get("/{full_path:path}")
 async def serve_frontend(full_path: str):
     """Serve the frontend React app for all non-API routes."""
+    # Skip API routes
+    if full_path.startswith("api/") or full_path.startswith("ws/") or full_path.startswith("debug/"):
+        return {"error": "Not found"}
+
     # If the frontend dist exists, serve index.html
     if _FRONTEND_DIST.exists():
         index_file = _FRONTEND_DIST / "index.html"
         if index_file.exists():
             return FileResponse(str(index_file))
+
     # Fallback for development or if frontend not built
-    return {"message": "Frontend not built. Run 'cd frontend && npm run build'"}
+    return {
+        "error": "Frontend not built",
+        "message": "Run 'cd frontend && npm run build'",
+        "frontend_path": str(_FRONTEND_DIST),
+        "exists": _FRONTEND_DIST.exists()
+    }

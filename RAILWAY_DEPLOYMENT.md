@@ -90,14 +90,14 @@ railway open
 
 ## 📋 What Railway Does Automatically
 
-When you deploy, Railway:
-1. ✅ Detects it's a Python + Node.js app
-2. ✅ Installs backend dependencies (`pip install -r backend/requirements.txt`)
-3. ✅ Installs frontend dependencies (`npm install` in frontend/)
-4. ✅ Builds frontend (`npm run build`)
-5. ✅ Starts backend with WebSocket support
-6. ✅ Serves frontend static files
-7. ✅ Connects them together with internal networking
+When you deploy with the bundled `nixpacks.toml`, Railway:
+1. ✅ Installs Python 3.11 and Node.js 18 build tools in the same image
+2. ✅ Installs backend dependencies (`python3 -m pip install -r backend/requirements.txt`)
+3. ✅ Installs frontend dependencies (`NPM_CONFIG_PRODUCTION=false npm ci` in `frontend/`)
+4. ✅ Builds the production frontend (`npm run build`)
+5. ✅ Starts the FastAPI backend with WebSocket support
+6. ✅ Serves the compiled frontend static files from FastAPI
+7. ✅ Connects services together with internal networking
 8. ✅ Provides HTTPS domain automatically
 9. ✅ Sets up auto-deploy on git push
 
@@ -107,15 +107,19 @@ When you deploy, Railway:
 
 ## 🔧 Configuration Files
 
-I've created these files for optimal Railway deployment:
+This repo already includes the configuration Railway needs:
 
-### `railway.toml`
-Tells Railway how to run your backend.
+### `railway.json`
+Locks the deployment to the Nixpacks builder and defines the backend start
+command (`uvicorn backend.server:app --host 0.0.0.0 --port $PORT`).
 
 ### `nixpacks.toml`
-Tells Railway how to build both frontend and backend.
-
-These files are committed to your repo, so Railway knows exactly what to do!
+Explicitly tells Nixpacks to install both Python and Node.js, run `npm ci`
+inside the frontend with `NPM_CONFIG_PRODUCTION=false` so dev dependencies like
+Vite are available, build the Vite assets, and install the backend requirements
+before the image is created. This prevents the "pip: command not found" and
+"npm: command not found" errors Railway showed when only one runtime was
+detected.
 
 ---
 

@@ -1,13 +1,12 @@
 {
+  "buildCommand": "cd frontend && npm install && npm run build",
   "installCommand": "NPM_CONFIG_PRODUCTION=false npm install --prefix frontend",
-  "buildCommand": "npm run build --prefix frontend",
+  "buildCommand": "npm --prefix frontend run build",
   "outputDirectory": "frontend/dist",
-  "devCommand": "npm run dev --prefix frontend",
+  "installCommand": "npm install --prefix frontend"
   "framework": "vite",
   "rewrites": [
     {
       "source": "/(.*)",
       "destination": "/index.html"
-    }
-  ]
 }

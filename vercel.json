@@ -1,8 +1,8 @@
 {
-  "installCommand": "cd frontend && npm install --include=dev",
-  "buildCommand": "cd frontend && node ./node_modules/vite/bin/vite.js build",
+  "installCommand": "NPM_CONFIG_PRODUCTION=false npm install --prefix frontend",
+  "buildCommand": "npm run build --prefix frontend",
   "outputDirectory": "frontend/dist",
-  "devCommand": "cd frontend && npm run dev",
+  "devCommand": "npm run dev --prefix frontend",
   "framework": "vite",
   "rewrites": [
     {
